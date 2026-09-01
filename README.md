@@ -176,6 +176,11 @@ to the Agent. The protocol is kept generic enough that it could carry other
 application protocols later, but the initial implementation is optimised for
 HTTP proxying.
 
+It is also **not** a way to get around network security. GRIP is a tunnel and
+makes no attempt to hide that — a TLS-inspecting firewall will identify it as
+one. Run it only where you are authorised to expose the internal service. See
+[Detectability and acceptable use](docs/security.md#detectability-and-acceptable-use).
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).

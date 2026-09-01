@@ -58,6 +58,37 @@ Considered in Stage 8:
   rejection);
 - oversized headers or bodies (hard limits, early rejection).
 
+## Detectability and acceptable use
+
+GRIP is a tunnel. It carries arbitrary HTTP from the public Internet into a
+private network over a persistent outbound connection. This is the point — and
+it is also exactly what network security tooling is built to find.
+
+- On an **egress-permissive** network (home, small office, CGNAT, a cloud VPC
+  with NAT egress — no TLS-inspecting middlebox) GRIP-over-HTTPS looks like an
+  ordinary long-lived TLS connection to a web host and works cleanly.
+- On a network with a **decrypting next-generation firewall or secure web
+  gateway** (Palo Alto, Zscaler, Netskope, Fortinet, …) plus threat
+  prevention, GRIP is very likely to be **identified as a tunnel and may be
+  blocked**. Once TLS is decrypted the traffic does not resemble web browsing:
+  it is a long-lived connection carrying framed, nested HTTP requests and
+  responses to a single external host, with the internal machine acting as a
+  server — all strong tunnelling / C2 signatures. The transport framing does
+  not change this; a reverse tunnel is identifiable as one regardless of how
+  its bytes are shaped.
+
+GRIP does **not**, and will **not**, attempt to disguise its traffic — no
+domain fronting, no traffic mimicry, no timing jitter, no destination
+rotation. Making a tunnel look like something else is red-team evasion and out
+of scope.
+
+Run GRIP only where you are **authorised** to expose the internal service:
+either the network permits egress tunnels, or you administer the security
+policy and have deliberately allowlisted the Controller domain (and, if TLS is
+inspected, exempted it from decryption). An organisation that wants GRIP can
+permit it on purpose; one that does not will detect it — which is the correct
+outcome.
+
 ## Logging
 
 - Request lines and header **names** may be logged at INFO.
