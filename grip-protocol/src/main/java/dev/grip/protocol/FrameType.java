@@ -1,55 +1,58 @@
 package dev.grip.protocol;
 
 /**
- * The kinds of frame that travel over a GRIP connection. These <em>concepts</em>
- * are decided; their binary encoding is not (see {@code docs/protocol.md}).
+ * The kinds of frame that travel over a GRIP connection, and their wire type
+ * byte. See {@code docs/protocol.md} for the full frame format.
  *
  * <p>A GRIP connection carries many independent <em>channels</em>, one per
- * in-flight external HTTP request. Every data-plane frame names its channel;
- * connection-control frames ({@link #PING}, {@link #PONG}) do not.
+ * in-flight external HTTP request. Channel-scoped frames name their channel;
+ * connection-scoped frames ({@link #REGISTER}, {@link #REGISTER_OK},
+ * {@link #REGISTER_REJECTED}, {@link #PING}, {@link #PONG}) use channel 0.
  */
 public enum FrameType {
 
-    /** Start of a proxied request: method, path, headers. Channel-scoped. */
-    REQUEST_START,
+    REGISTER(0x01, false),
+    REGISTER_OK(0x02, false),
+    REGISTER_REJECTED(0x03, false),
 
-    /** A chunk of the request body. Channel-scoped. */
-    REQUEST_DATA,
+    REQUEST_START(0x10, true),
+    REQUEST_DATA(0x11, true),
+    REQUEST_END(0x12, true),
 
-    /** The request body is complete. Channel-scoped. */
-    REQUEST_END,
+    RESPONSE_START(0x20, true),
+    RESPONSE_DATA(0x21, true),
+    RESPONSE_END(0x22, true),
 
-    /** Start of the response: status and headers. Channel-scoped. */
-    RESPONSE_START,
+    CANCEL(0x30, true),
+    ERROR(0x31, true),
 
-    /** A chunk of the response body. Channel-scoped. */
-    RESPONSE_DATA,
+    PING(0x40, false),
+    PONG(0x41, false);
 
-    /** The response body is complete; the channel is finished. Channel-scoped. */
-    RESPONSE_END,
+    private final int wire;
+    private final boolean channelScoped;
 
-    /**
-     * Either side abandons the channel (external client gone, internal service
-     * failed, shutdown). The peer should stop work and release the channel.
-     * Channel-scoped.
-     */
-    CANCEL,
+    FrameType(int wire, boolean channelScoped) {
+        this.wire = wire;
+        this.channelScoped = channelScoped;
+    }
 
-    /**
-     * A channel-scoped error that ends the channel abnormally (as opposed to a
-     * connection-fatal problem). Carries a code and optional message.
-     * Channel-scoped.
-     */
-    ERROR,
-
-    /** Connection heartbeat / liveness probe. Not channel-scoped. */
-    PING,
-
-    /** Reply to a {@link #PING}. Not channel-scoped. */
-    PONG;
+    /** The single byte identifying this type on the wire. */
+    public byte wire() {
+        return (byte) wire;
+    }
 
     /** Whether a frame of this type is bound to a single channel. */
     public boolean isChannelScoped() {
-        return this != PING && this != PONG;
+        return channelScoped;
+    }
+
+    public static FrameType fromWire(byte b) {
+        for (FrameType t : values()) {
+            if (t.wire == (b & 0xff)) {
+                return t;
+            }
+        }
+        return null;
     }
 }
