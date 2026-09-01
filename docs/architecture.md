@@ -1,8 +1,3 @@
----
-title: Architecture
-nav_order: 2
----
-
 # Architecture
 
 GRIP has two runtime components and one shared library.

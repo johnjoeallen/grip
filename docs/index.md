@@ -1,8 +1,3 @@
----
-title: Home
-nav_order: 1
----
-
 # GRIP — Generic Reverse Interconnect Proxy
 
 GRIP gives external users secure HTTPS access to HTTP services running inside a

@@ -9,11 +9,9 @@ target/
 .project
 .classpath
 
-# Jekyll (docs/)
-docs/_site/
-docs/.jekyll-cache/
-docs/vendor/
-docs/Gemfile.lock
+# MkDocs
+/site/
+/_site/
 
 # Compiled class file
 *.class

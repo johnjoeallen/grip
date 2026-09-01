@@ -1,0 +1,67 @@
+site_name: GRIP
+site_description: Generic Reverse Interconnect Proxy — secure external access to HTTP services inside a private network, with no inbound firewall rule.
+site_url: https://johnjoeallen.github.io/grip/
+repo_url: https://github.com/johnjoeallen/grip
+repo_name: johnjoeallen/grip
+edit_uri: edit/main/docs/
+copyright: Apache License 2.0
+
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.action.edit
+    - search.suggest
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - tables
+  - toc:
+      permalink: true
+
+exclude_docs: |
+  backlog/
+  requirements.txt
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - GRIP Protocol: protocol.md
+  - Security: security.md
+  - Development: development.md
+  - Roadmap: roadmap.md
