@@ -1,7 +1,6 @@
 package dev.grip.agent.connect;
 
 import dev.grip.agent.GripAgentProperties;
-import dev.grip.protocol.wire.ControlFrame;
 import dev.grip.protocol.wire.RegisterRejectReason;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -109,7 +108,7 @@ public class AgentConnectionManager {
         stopping = true;
         AgentConnection c = current.get();
         if (c != null) {
-            c.send(ControlFrame.of("BYE"));
+            // A WebSocket NORMAL_CLOSURE is the graceful goodbye.
             c.close("agent-shutdown");
         }
         Thread l = loop;

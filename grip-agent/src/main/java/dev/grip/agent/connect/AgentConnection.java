@@ -1,43 +1,41 @@
 package dev.grip.agent.connect;
 
 import dev.grip.protocol.GripProtocol;
-import dev.grip.protocol.wire.ControlFrame;
-import dev.grip.protocol.wire.ProxyCodec;
-import dev.grip.protocol.wire.ProxyMessage;
+import dev.grip.protocol.wire.Frame;
+import dev.grip.protocol.wire.FrameCodec;
+import dev.grip.protocol.wire.ProtocolException;
 import dev.grip.protocol.wire.RegisterRejectReason;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * The Agent's single long-lived outbound connection to the Controller: a
- * WebSocket over TLS.
+ * WebSocket over TLS carrying {@link Frame} binary messages.
  *
  * <p>WebSocket rather than a raw HTTP stream because the JDK HTTP client cannot
- * surface a response while a request body is still open, so a single
- * full-duplex HTTP request is not possible. The connection is still
- * Agent-initiated, one connection, plain {@code wss://} — see
- * {@code docs/protocol.md}.
- *
- * <p>TLS validation is the JDK default — full chain and hostname checks, no
- * override, no insecure mode.
- *
- * <p>Stage 1 scope: connect, REGISTER, hold the connection. Reconnect and
- * heartbeat are layered on via {@link #onClosed}.
+ * surface a response while a request body is still open. TLS validation is the
+ * JDK default — full chain and hostname checks, no override, no insecure mode.
  */
 public final class AgentConnection {
 
@@ -52,7 +50,9 @@ public final class AgentConnection {
     private final RequestForwarder forwarder;
 
     private final Object writeLock = new Object();
-    private final StringBuilder inbound = new StringBuilder();
+    private final ByteArrayOutputStream inbound = new ByteArrayOutputStream();
+    private final Map<Long, ForwardingChannel> channels = new ConcurrentHashMap<>();
+
     private volatile WebSocket socket;
     private volatile ConnectionState state = ConnectionState.IDLE;
     private final AtomicReference<String> closeReason = new AtomicReference<>();
@@ -83,8 +83,7 @@ public final class AgentConnection {
             case "http", "ws" -> "ws";
             default -> throw new IllegalArgumentException("controller-url must be http(s): " + controllerBase);
         };
-        String base = scheme + "://" + controllerBase.getAuthority();
-        return URI.create(base).resolve(GripProtocol.AGENT_CONNECT_PATH);
+        return URI.create(scheme + "://" + controllerBase.getAuthority()).resolve(GripProtocol.AGENT_CONNECT_PATH);
     }
 
     public ConnectionState state() {
@@ -95,16 +94,14 @@ public final class AgentConnection {
         return closeReason.get();
     }
 
-    /** Present when the connection ended because the Controller rejected REGISTER. */
-    public java.util.Optional<RegisterRejectReason> rejectReason() {
-        return java.util.Optional.ofNullable(rejectReason.get());
+    public Optional<RegisterRejectReason> rejectReason() {
+        return Optional.ofNullable(rejectReason.get());
     }
 
     public Instant lastInbound() {
         return lastInbound;
     }
 
-    /** Completes with the close reason when the connection ends. */
     public CompletableFuture<String> closed() {
         return closed;
     }
@@ -117,10 +114,7 @@ public final class AgentConnection {
         }
     }
 
-    /**
-     * Opens the WebSocket and registers. Returns once REGISTER_OK arrives, or
-     * throws if the attempt fails. Does not retry.
-     */
+    /** Opens the WebSocket and registers. Returns once REGISTER_OK arrives, or throws. Does not retry. */
     public void connect() throws Exception {
         state = ConnectionState.CONNECTING;
         try {
@@ -133,7 +127,7 @@ public final class AgentConnection {
             throw e;
         }
 
-        send(ControlFrame.of("REGISTER", agentId, String.valueOf(GripProtocol.VERSION)));
+        send(new Frame.Register(GripProtocol.VERSION, agentId));
 
         try {
             registered.get(handshakeTimeout.toMillis(), TimeUnit.MILLISECONDS);
@@ -163,29 +157,76 @@ public final class AgentConnection {
             close("heartbeat-timeout");
             return;
         }
-        send(ControlFrame.of("PING"));
+        send(new Frame.Ping(ThreadLocalRandom.current().nextLong()));
     }
 
     /** Serialised; the JDK WebSocket forbids a second send before the first completes. */
-    public void send(ControlFrame frame) {
-        sendText(frame.encode().strip());
-    }
-
-    private void sendProxy(ProxyMessage message) {
-        sendText(ProxyCodec.encode(message));
-    }
-
-    private void sendText(String text) {
+    public void send(Frame frame) {
         synchronized (writeLock) {
             WebSocket ws = socket;
             if (ws == null || state == ConnectionState.DISCONNECTED) {
                 return;
             }
             try {
-                ws.sendText(text, true).get(10, TimeUnit.SECONDS);
+                ws.sendBinary(ByteBuffer.wrap(FrameCodec.encode(frame)), true).get(10, TimeUnit.SECONDS);
             } catch (Exception e) {
                 close("send-failed: " + rootMessage(e));
             }
+        }
+    }
+
+    private void onFrame(Frame frame) {
+        lastInbound = Instant.now();
+
+        if (!registered.isDone()) {
+            handleRegisterReply(frame);
+            return;
+        }
+        switch (frame) {
+            case Frame.Ping ping -> send(new Frame.Pong(ping.nonce()));
+            case Frame.Pong ignored -> { }
+            case Frame.RequestStart start -> channel(start.channel()).onStart(start);
+            case Frame.RequestData data -> channel(data.channel()).onData(data);
+            case Frame.RequestEnd end -> {
+                ForwardingChannel c = channels.get(end.channel());
+                if (c != null) {
+                    c.onEnd();
+                }
+            }
+            case Frame.Cancel cancel -> {
+                ForwardingChannel c = channels.remove(cancel.channel());
+                if (c != null) {
+                    c.cancel();
+                }
+            }
+            default -> log.debug("ignoring frame {}", frame.type());
+        }
+    }
+
+    private ForwardingChannel channel(long id) {
+        return channels.computeIfAbsent(id, k ->
+                new ForwardingChannel(id, forwarder, this::sendChannelFrame));
+    }
+
+    private void sendChannelFrame(Frame frame) {
+        send(frame);
+        if (frame instanceof Frame.ResponseEnd || frame instanceof Frame.Error) {
+            channels.remove(frame.channel());
+        }
+    }
+
+    private void handleRegisterReply(Frame frame) {
+        switch (frame) {
+            case Frame.RegisterOk ignored -> {
+                state = ConnectionState.REGISTERED;
+                registered.complete(null);
+                log.info("registered with Controller as '{}'", agentId);
+            }
+            case Frame.RegisterRejected rejected -> {
+                rejectReason.set(rejected.reason());
+                fail("rejected:" + rejected.reason());
+            }
+            default -> fail("unexpected-reply:" + frame.type());
         }
     }
 
@@ -201,6 +242,8 @@ public final class AgentConnection {
         if (heartbeat != null) {
             heartbeat.shutdownNow();
         }
+        channels.values().forEach(ForwardingChannel::cancel);
+        channels.clear();
         WebSocket ws = socket;
         if (ws != null) {
             ws.sendClose(WebSocket.NORMAL_CLOSURE, "bye").exceptionally(t -> null);
@@ -227,65 +270,6 @@ public final class AgentConnection {
         closed.complete(reason);
     }
 
-    private void onMessage(String message) {
-        lastInbound = Instant.now();
-
-        if (ProxyCodec.isProxyMessage(message)) {
-            handleProxyMessage(message);
-            return;
-        }
-
-        ControlFrame frame;
-        try {
-            frame = ControlFrame.parse(message);
-        } catch (RuntimeException e) {
-            log.debug("ignoring unparseable frame: {}", message);
-            return;
-        }
-        if (!registered.isDone()) {
-            handleRegisterReply(frame);
-            return;
-        }
-        if (frame.is("PING")) {
-            send(ControlFrame.of("PONG"));
-        } else if (frame.is("BYE")) {
-            close("controller-bye");
-        }
-        // PONG and anything else: liveness only.
-    }
-
-    private void handleProxyMessage(String message) {
-        ProxyMessage decoded;
-        try {
-            decoded = ProxyCodec.decode(message);
-        } catch (RuntimeException e) {
-            log.warn("undecodable proxy message dropped: {}", e.toString());
-            return;
-        }
-        if (decoded instanceof ProxyMessage.Request request) {
-            // Forward on a virtual thread so the WebSocket reader keeps flowing.
-            Thread.ofVirtual().name("grip-agent-forward-" + request.channel()).start(() -> {
-                ProxyMessage reply = forwarder.forward(request);
-                sendProxy(reply);
-            });
-        }
-        // Response/Failure are Controller->Agent only in this direction; ignore.
-    }
-
-    private void handleRegisterReply(ControlFrame frame) {
-        if (frame.is("REGISTER_OK")) {
-            state = ConnectionState.REGISTERED;
-            registered.complete(null);
-            log.info("registered with Controller as '{}'", agentId);
-        } else if (frame.is("REGISTER_REJECTED")) {
-            RegisterRejectReason reason = RegisterRejectReason.from(frame.arg(0));
-            rejectReason.set(reason);
-            fail("rejected:" + reason);
-        } else {
-            fail("unexpected-reply:" + frame.verb());
-        }
-    }
-
     private static String rootMessage(Throwable t) {
         Throwable cur = t;
         while (cur.getCause() != null && cur.getCause() != cur) {
@@ -294,7 +278,7 @@ public final class AgentConnection {
         return cur.getClass().getSimpleName() + (cur.getMessage() != null ? ": " + cur.getMessage() : "");
     }
 
-    /** Reassembles fragmented text messages into whole frame lines. */
+    /** Reassembles fragmented binary messages, one frame per message. */
     private final class Listener implements WebSocket.Listener {
 
         @Override
@@ -303,15 +287,20 @@ public final class AgentConnection {
         }
 
         @Override
-        public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
-            inbound.append(data);
+        public CompletionStage<?> onBinary(WebSocket webSocket, ByteBuffer data, boolean last) {
+            byte[] chunk = new byte[data.remaining()];
+            data.get(chunk);
+            inbound.writeBytes(chunk);
             if (last) {
-                String message = inbound.toString();
-                inbound.setLength(0);
+                byte[] message = inbound.toByteArray();
+                inbound.reset();
                 try {
-                    onMessage(message);
+                    onFrame(FrameCodec.decode(message));
+                } catch (ProtocolException e) {
+                    log.warn("protocol error from Controller: {}", e.getMessage());
+                    close("protocol-error");
                 } catch (RuntimeException e) {
-                    log.warn("message handling failed", e);
+                    log.warn("frame handling failed", e);
                 }
             }
             webSocket.request(1);

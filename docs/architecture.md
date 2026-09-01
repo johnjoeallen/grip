@@ -112,10 +112,10 @@ sequenceDiagram
 The Controller keeps `channel id → external request/response`; the Agent keeps
 `channel id → internal request/response`.
 
-*Stage 2 status:* this flow works end to end, but with **one in-flight request
-per Agent** (a second returns `503`) and request/response bodies **buffered**
-(provisional `ProxyMessage` JSON framing). Stage 4 adds multiplexing; Stage 5
-makes it stream.
+*Status:* this flow works end to end over the binary
+[frame format](protocol.md), including `CANCEL` and `ERROR`. Still **one
+in-flight request per Agent** (a second returns `503`) with bodies
+**buffered** — Stage 4 adds multiplexing, Stage 5 makes it stream.
 
 ## 4. Multiplexed concurrent requests
 

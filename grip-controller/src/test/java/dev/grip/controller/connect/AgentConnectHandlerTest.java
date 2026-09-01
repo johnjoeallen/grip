@@ -1,6 +1,7 @@
 package dev.grip.controller.connect;
 
-import dev.grip.protocol.wire.ControlFrame;
+import dev.grip.protocol.wire.Frame;
+import dev.grip.protocol.wire.RegisterRejectReason;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -15,12 +16,12 @@ class AgentConnectHandlerTest {
     private final AgentConnectHandler handler = new AgentConnectHandler(registry);
 
     private static final class RecordingSink implements FrameSink {
-        final List<String> sent = new ArrayList<>();
+        final List<Frame> sent = new ArrayList<>();
         boolean closed;
 
         @Override
-        public void send(String line) {
-            sent.add(line);
+        public void send(Frame frame) {
+            sent.add(frame);
         }
 
         @Override
@@ -41,50 +42,49 @@ class AgentConnectHandlerTest {
     void admitsAValidRegisterThenAnswersPing() {
         newConnection();
 
-        boolean ok = handler.register(conn, ControlFrame.of("REGISTER", "alpha", "0"));
+        boolean ok = handler.register(conn, new Frame.Register(0, "alpha"));
 
         assertThat(ok).isTrue();
-        assertThat(sink.sent).containsExactly("REGISTER_OK");
+        assertThat(sink.sent).containsExactly(new Frame.RegisterOk());
         assertThat(registry.get("alpha")).contains(conn);
 
-        handler.frame(conn, ControlFrame.of("PING"));
-        assertThat(sink.sent).containsExactly("REGISTER_OK", "PONG");
+        handler.frame(conn, new Frame.Ping(42));
+        assertThat(sink.sent).containsExactly(new Frame.RegisterOk(), new Frame.Pong(42));
     }
 
     @Test
     void rejectsUnsupportedVersion() {
         newConnection();
-        assertThat(handler.register(conn, ControlFrame.of("REGISTER", "alpha", "99"))).isFalse();
-        assertThat(sink.sent).containsExactly("REGISTER_REJECTED UNSUPPORTED_VERSION");
+        assertThat(handler.register(conn, new Frame.Register(99, "alpha"))).isFalse();
+        assertThat(sink.sent).containsExactly(new Frame.RegisterRejected(RegisterRejectReason.UNSUPPORTED_VERSION));
         assertThat(sink.closed).isTrue();
     }
 
     @Test
-    void rejectsMalformedRegister() {
+    void rejectsANonRegisterFirstFrame() {
         newConnection();
-        assertThat(handler.register(conn, ControlFrame.of("HELLO"))).isFalse();
-        assertThat(sink.sent).containsExactly("REGISTER_REJECTED MALFORMED");
+        assertThat(handler.register(conn, new Frame.Ping(1))).isFalse();
+        assertThat(sink.sent).containsExactly(new Frame.RegisterRejected(RegisterRejectReason.MALFORMED));
     }
 
     @Test
     void rejectsADuplicate() {
         newConnection();
-        handler.register(conn, ControlFrame.of("REGISTER", "alpha", "0"));
+        handler.register(conn, new Frame.Register(0, "alpha"));
 
         newConnection();
-        assertThat(handler.register(conn, ControlFrame.of("REGISTER", "alpha", "0"))).isFalse();
-        assertThat(sink.sent).containsExactly("REGISTER_REJECTED DUPLICATE_AGENT_ID");
+        assertThat(handler.register(conn, new Frame.Register(0, "alpha"))).isFalse();
+        assertThat(sink.sent).containsExactly(new Frame.RegisterRejected(RegisterRejectReason.DUPLICATE_AGENT_ID));
     }
 
     @Test
-    void byeClosesAndDisconnectClearsTheRegistry() {
+    void disconnectClearsTheRegistry() {
         newConnection();
-        handler.register(conn, ControlFrame.of("REGISTER", "alpha", "0"));
-
-        handler.frame(conn, ControlFrame.of("BYE"));
-        assertThat(conn.state()).isEqualTo(AgentConnection.State.CLOSED);
+        handler.register(conn, new Frame.Register(0, "alpha"));
 
         handler.closed(conn, "ws-closed");
+
+        assertThat(conn.state()).isEqualTo(AgentConnection.State.CLOSED);
         assertThat(registry.get("alpha")).isEmpty();
     }
 }
