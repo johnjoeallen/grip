@@ -1,8 +1,3 @@
----
-title: Roadmap
-nav_order: 6
----
-
 # Roadmap
 
 GRIP is built in small, ordered stages. Each stage leaves the repository in a

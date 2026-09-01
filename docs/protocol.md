@@ -1,8 +1,3 @@
----
-title: GRIP Protocol
-nav_order: 3
----
-
 # GRIP Protocol
 
 This page is the running record of what the GRIP wire protocol **is** and what
