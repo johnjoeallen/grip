@@ -1,0 +1,34 @@
+spring:
+  application:
+    name: grip-controller
+
+server:
+  port: 8443
+  # TLS is mandatory in production. Certificate issuance/renewal is handled
+  # outside GRIP (Let's Encrypt tooling or a terminating reverse proxy) — see
+  # docs/security.md. Enable and point at a real keystore for a real deployment:
+  # ssl:
+  #   enabled: true
+  #   bundle: grip-controller
+
+grip:
+  # REQUIRED. The domain under which Agents are exposed. An external request to
+  # alpha.<base-domain> is routed to the Agent that registered as "alpha".
+  base-domain: grip.example.com
+  connect:
+    heartbeat-interval: 15s
+    agent-timeout: 45s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  level:
+    dev.grip: INFO

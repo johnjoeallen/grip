@@ -1,0 +1,93 @@
+package dev.grip.it;
+
+import com.sun.net.httpserver.HttpServer;
+
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+
+/**
+ * A minimal internal HTTP service, standing in for whatever a real Agent would
+ * expose. Used by the end-to-end tests as the far side of the proxy chain:
+ *
+ * <pre>
+ *   HTTP client -> Controller -> Agent -> TrivialHttpService
+ * </pre>
+ *
+ * <ul>
+ *   <li>{@code GET /status} → {@code 200 "ok"}</li>
+ *   <li>{@code POST /echo} → {@code 200} with the request body echoed back</li>
+ *   <li>{@code GET /slow?ms=N} → {@code 200 "ok"} after an N ms delay
+ *       (for cancellation tests)</li>
+ * </ul>
+ */
+public final class TrivialHttpService implements AutoCloseable {
+
+    private final HttpServer server;
+
+    private TrivialHttpService(HttpServer server) {
+        this.server = server;
+    }
+
+    public static TrivialHttpService start() throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/status", exchange -> respond(exchange, 200, "ok"));
+        server.createContext("/echo", exchange -> {
+            byte[] body = exchange.getRequestBody().readAllBytes();
+            exchange.getResponseHeaders().add("Content-Type", "application/octet-stream");
+            exchange.sendResponseHeaders(200, body.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(body);
+            }
+        });
+        server.createContext("/slow", exchange -> {
+            long ms = queryMillis(exchange.getRequestURI().getQuery());
+            try {
+                Thread.sleep(ms);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            respond(exchange, 200, "ok");
+        });
+        server.start();
+        return new TrivialHttpService(server);
+    }
+
+    public int port() {
+        return server.getAddress().getPort();
+    }
+
+    public String baseUrl() {
+        return "http://127.0.0.1:" + port();
+    }
+
+    @Override
+    public void close() {
+        server.stop(0);
+    }
+
+    private static void respond(com.sun.net.httpserver.HttpExchange exchange, int status, String body) throws IOException {
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        exchange.sendResponseHeaders(status, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
+    }
+
+    private static long queryMillis(String query) {
+        if (query == null) {
+            return 0;
+        }
+        for (String pair : query.split("&")) {
+            if (pair.startsWith("ms=")) {
+                try {
+                    return Long.parseLong(pair.substring(3));
+                } catch (NumberFormatException ignored) {
+                    return 0;
+                }
+            }
+        }
+        return 0;
+    }
+}

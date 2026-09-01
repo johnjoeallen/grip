@@ -1,3 +1,20 @@
+# Maven
+target/
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# Jekyll (docs/)
+docs/_site/
+docs/.jekyll-cache/
+docs/vendor/
+docs/Gemfile.lock
+
 # Compiled class file
 *.class
 

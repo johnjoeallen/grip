@@ -1,0 +1,33 @@
+spring:
+  application:
+    name: grip-agent
+
+# The Agent exposes only a localhost health endpoint for supervision.
+# It accepts no GRIP traffic inbound.
+server:
+  address: 127.0.0.1
+  port: 8081
+
+grip:
+  # REQUIRED. The name this Agent registers as. External host
+  # <agent-id>.<controller base domain> routes here.
+  agent-id: alpha
+  # REQUIRED. Must be https. The Agent validates the certificate chain and
+  # hostname normally — there is no insecure mode.
+  controller-url: https://controller.grip.example.com
+  # REQUIRED. The single internal service this Agent exposes.
+  target-url: http://localhost:8080
+  reconnect:
+    initial-backoff: 1s
+    max-backoff: 30s
+    heartbeat-interval: 15s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    dev.grip: INFO
