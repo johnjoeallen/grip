@@ -50,9 +50,10 @@ Connection-level control for **REGISTER** (Agent identity) and heartbeat
 details are part of the same frame model; their binary encoding is fixed in
 Stage 3.
 
-**Stage 1 provisional framing.** Until the binary codec lands, connection
-lifecycle uses a line-oriented placeholder (`dev.grip.protocol.wire.ControlFrame`),
-one frame per WebSocket text message:
+**Stage 1 provisional framing.** Superseded by [the frame format](#the-frame-format-v0)
+once Stages 3.3/3.4 land. Historically, connection lifecycle used a
+line-oriented placeholder (`dev.grip.protocol.wire.ControlFrame`), one frame
+per WebSocket text message:
 
 | Frame | Direction | Meaning |
 |---|---|---|
@@ -65,8 +66,9 @@ one frame per WebSocket text message:
 `agentId` must match `[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?` and must not be a
 reserved name (`www`, `api`, `controller`, `health`, `admin`, `grip`).
 
-**Stage 2 provisional proxy framing.** The first end-to-end request slice uses
-`dev.grip.protocol.wire.ProxyMessage` + `ProxyCodec`: one JSON object per
+**Stage 2 provisional proxy framing.** Also superseded by
+[the frame format](#the-frame-format-v0). The first end-to-end request slice
+used `dev.grip.protocol.wire.ProxyMessage` + `ProxyCodec`: one JSON object per
 WebSocket text message, telling proxy messages from control frames by a
 leading `{`.
 
@@ -103,31 +105,105 @@ limit.
 - Mandatory. Full certificate-chain validation and hostname verification on the
   Agent side. No insecure mode exists.
 
-## Deferred until implementation
+## The frame format (v0)
 
-These are **open on purpose**. Picking them now would be guessing.
+Decided in Stage 3. One GRIP frame per WebSocket **binary** message. The frame
+is also self-delimiting (it carries its own length) so it does not depend on
+WebSocket message boundaries — the same bytes are meaningful over any ordered,
+reliable byte stream.
 
-- **Binary vs. text framing.** Leaning binary (length-prefixed). To be decided
-  in Stage 3 with a written spec.
-- **Frame header layout** — type tag, channel ID width, length field width,
-  flags.
-- **Header encoding** — how HTTP headers are represented inside `REQUEST_START`
-  / `RESPONSE_START` (name/value list, HPACK-like, plain).
-- **Flow control / backpressure** — per-channel windows vs. relying on the
-  underlying stream's flow control. Addressed in Stage 5.
-- **Channel ID allocation** — monotonic vs. free-list reuse, and the exact
-  width (`ChannelId` currently wraps a `long` as a placeholder).
-- **REGISTER exchange** — the Stage 1 line form above is provisional; the
-  binary encoding, any richer handshake (capabilities, auth), and whether it
-  moves off a plain text message are for Stage 3.
-- **Error codes** — the enumerated set for `ERROR` (the `REGISTER_REJECTED`
-  reasons are settled).
-- **Settings/negotiation** — max frame size, max concurrent channels, heartbeat
-  interval: fixed constants for now (`GripProtocol`), negotiated later if
-  needed.
-- **Trailers** — whether HTTP trailers are forwarded.
-- **Multiple services per Agent** — the model allows it; v1 exposes exactly
-  one. Out of scope until after Stage 6.
+### Frame layout
+
+```
+ 0        1        2                                10       14
+ +--------+--------+--------------------------------+--------+· · · · · ·+
+ | type   | flags  |         channel  (u64)         | length |  payload  |
+ | u8     | u8     |         big-endian             | u32 BE |  = length |
+ +--------+--------+--------------------------------+--------+· · · · · ·+
+```
+
+- **type** — the frame kind (table below).
+- **flags** — reserved, always `0` in v0. A reader must reject a non-zero
+  flags byte it does not understand.
+- **channel** — the channel this frame belongs to; `0` for connection-scoped
+  frames (`REGISTER*`, `PING`, `PONG`).
+- **length** — payload byte count. Must be ≤ `MAX_FRAME_PAYLOAD_BYTES`
+  (for a `*_DATA` payload) or `MAX_HEADER_BYTES` (for a `*_START` payload).
+
+### Frame types
+
+| type | name | scope | payload |
+|---|---|---|---|
+| `0x01` | `REGISTER` | conn | `u16` protocol version, `u8` idLen, id (UTF-8) |
+| `0x02` | `REGISTER_OK` | conn | empty |
+| `0x03` | `REGISTER_REJECTED` | conn | `u8` reason code |
+| `0x10` | `REQUEST_START` | channel | method + target + headers (below) |
+| `0x11` | `REQUEST_DATA` | channel | body bytes |
+| `0x12` | `REQUEST_END` | channel | empty |
+| `0x20` | `RESPONSE_START` | channel | status + headers (below) |
+| `0x21` | `RESPONSE_DATA` | channel | body bytes |
+| `0x22` | `RESPONSE_END` | channel | empty |
+| `0x30` | `CANCEL` | channel | `u8` cancel reason |
+| `0x31` | `ERROR` | channel | `u8` error code, `u16` msgLen, message (UTF-8) |
+| `0x40` | `PING` | conn | `u64` nonce |
+| `0x41` | `PONG` | conn | `u64` nonce (echoed) |
+
+### Header block (`REQUEST_START` / `RESPONSE_START`)
+
+```
+REQUEST_START :  u8 methodLen | method | u16 targetLen | target | headers
+RESPONSE_START:  u16 status | headers
+headers       :  u16 count | count × ( u16 nameLen | name | u16 valueLen | value )
+```
+
+- `target` is the request path plus query (`/books?author=x`).
+- One entry per header value; a repeated header is repeated entries, in order.
+- Names and values are UTF-8. The whole `*_START` payload is bounded by
+  `MAX_HEADER_BYTES`.
+- **Hop-by-hop** headers (`Connection` and what it names, `Keep-Alive`, `TE`,
+  `Trailer`, `Transfer-Encoding`, `Upgrade`, `Proxy-*`) and `Content-Length`
+  are not carried; each side derives framing from the `*_DATA`/`*_END` frames.
+
+### Reason / error codes
+
+`REGISTER_REJECTED` reason (`u8`): `0` MALFORMED, `1` UNSUPPORTED_VERSION,
+`2` DUPLICATE_AGENT_ID, `3` RESERVED_AGENT_ID.
+
+`CANCEL` reason (`u8`): `0` UNSPECIFIED, `1` CLIENT_GONE, `2` SERVICE_FAILED,
+`3` SHUTDOWN.
+
+`ERROR` code (`u8`): `0` INTERNAL, `1` PROTOCOL, `2` BAD_GATEWAY,
+`3` GATEWAY_TIMEOUT, `4` TOO_LARGE.
+
+### Channel rules
+
+- The **Controller** allocates channel IDs, monotonically increasing per
+  connection, starting above `0`.
+- A channel is live from its first `REQUEST_START` until `RESPONSE_END`,
+  `CANCEL`, or `ERROR`. After that the id is retired and not reused within the
+  connection (reuse is a possible later optimisation).
+- Receiving a channel-scoped frame for an unknown or retired channel is
+  ignored (it is a losing race with `CANCEL`/`END`), except `REQUEST_START`
+  for an id at/below the highest allocated, which is a `PROTOCOL` error.
+
+### Malformed input
+
+A frame that is truncated, over a size limit, has an unknown `type` or a
+non-zero `flags`, or whose payload does not match its declared shape, is a
+**connection-fatal** protocol error: the reader closes the connection (the
+Controller drops the Agent; the Agent reconnects).
+
+## Still deferred
+
+- **Flow control / backpressure** — per-channel credit windows vs. relying on
+  the carrier. Stage 5.
+- **Settings / negotiation** — max frame size, max channels, heartbeat
+  interval are fixed constants (`GripProtocol`) for now.
+- **Trailers** — HTTP trailers are not forwarded yet.
+- **Richer REGISTER** — capabilities, auth. The frame has a version field to
+  hang a handshake off later.
+- **Multiple services per Agent** — the model allows it; v1 exposes one.
+- **Channel-id reuse** within a connection.
 
 ## Provisional limits
 
