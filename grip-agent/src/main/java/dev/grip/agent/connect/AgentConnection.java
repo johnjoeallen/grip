@@ -14,6 +14,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
@@ -42,23 +45,33 @@ public final class AgentConnection {
     private final URI connectUri;
     private final String agentId;
     private final Duration handshakeTimeout;
+    private final Duration heartbeatInterval;
+    private final Duration heartbeatTimeout;
 
     private final Object writeLock = new Object();
     private final StringBuilder inbound = new StringBuilder();
     private volatile WebSocket socket;
     private volatile ConnectionState state = ConnectionState.IDLE;
     private final AtomicReference<String> closeReason = new AtomicReference<>();
+    private final AtomicReference<RegisterRejectReason> rejectReason = new AtomicReference<>();
     private volatile Instant lastInbound = Instant.EPOCH;
     private final CompletableFuture<Void> registered = new CompletableFuture<>();
+    private final CompletableFuture<String> closed = new CompletableFuture<>();
+
+    private ScheduledExecutorService heartbeat;
+    private ScheduledFuture<?> heartbeatTask;
 
     /** Invoked once when the connection ends. Later issues use this for reconnect. */
     public volatile Runnable onClosed = () -> { };
 
-    public AgentConnection(HttpClient http, URI controllerBase, String agentId, Duration handshakeTimeout) {
+    public AgentConnection(HttpClient http, URI controllerBase, String agentId,
+            Duration handshakeTimeout, Duration heartbeatInterval, Duration heartbeatTimeout) {
         this.http = http;
         this.connectUri = toWebSocketUri(controllerBase);
         this.agentId = agentId;
         this.handshakeTimeout = handshakeTimeout;
+        this.heartbeatInterval = heartbeatInterval;
+        this.heartbeatTimeout = heartbeatTimeout;
     }
 
     static URI toWebSocketUri(URI controllerBase) {
@@ -79,8 +92,18 @@ public final class AgentConnection {
         return closeReason.get();
     }
 
+    /** Present when the connection ended because the Controller rejected REGISTER. */
+    public java.util.Optional<RegisterRejectReason> rejectReason() {
+        return java.util.Optional.ofNullable(rejectReason.get());
+    }
+
     public Instant lastInbound() {
         return lastInbound;
+    }
+
+    /** Completes with the close reason when the connection ends. */
+    public CompletableFuture<String> closed() {
+        return closed;
     }
 
     public void awaitRegistered(Duration timeout) throws Exception {
@@ -115,6 +138,29 @@ public final class AgentConnection {
             close("register-failed");
             throw new IOException(closeReason() != null ? closeReason() : "REGISTER failed", e);
         }
+        startHeartbeat();
+    }
+
+    private void startHeartbeat() {
+        heartbeat = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "grip-agent-heartbeat");
+            t.setDaemon(true);
+            return t;
+        });
+        long millis = Math.max(1000, heartbeatInterval.toMillis());
+        heartbeatTask = heartbeat.scheduleAtFixedRate(this::heartbeatTick, millis, millis, TimeUnit.MILLISECONDS);
+    }
+
+    private void heartbeatTick() {
+        if (state != ConnectionState.REGISTERED) {
+            return;
+        }
+        if (Duration.between(lastInbound, Instant.now()).compareTo(heartbeatTimeout) > 0) {
+            log.warn("no frame from Controller for {} — dropping connection", heartbeatTimeout);
+            close("heartbeat-timeout");
+            return;
+        }
+        send(ControlFrame.of("PING"));
     }
 
     /** Serialised; the JDK WebSocket forbids a second send before the first completes. */
@@ -138,6 +184,12 @@ public final class AgentConnection {
         }
         closeReason.compareAndSet(null, reason);
         state = ConnectionState.DISCONNECTED;
+        if (heartbeatTask != null) {
+            heartbeatTask.cancel(false);
+        }
+        if (heartbeat != null) {
+            heartbeat.shutdownNow();
+        }
         WebSocket ws = socket;
         if (ws != null) {
             ws.sendClose(WebSocket.NORMAL_CLOSURE, "bye").exceptionally(t -> null);
@@ -146,6 +198,7 @@ public final class AgentConnection {
         if (!registered.isDone()) {
             registered.completeExceptionally(new IOException("connection closed: " + reason));
         }
+        closed.complete(reason);
         log.info("connection closed: {}", reason);
         try {
             onClosed.run();
@@ -160,6 +213,7 @@ public final class AgentConnection {
         if (!registered.isDone()) {
             registered.completeExceptionally(new IOException(reason));
         }
+        closed.complete(reason);
     }
 
     private void onFrameLine(String line) {
@@ -190,6 +244,7 @@ public final class AgentConnection {
             log.info("registered with Controller as '{}'", agentId);
         } else if (frame.is("REGISTER_REJECTED")) {
             RegisterRejectReason reason = RegisterRejectReason.from(frame.arg(0));
+            rejectReason.set(reason);
             fail("rejected:" + reason);
         } else {
             fail("unexpected-reply:" + frame.verb());

@@ -21,6 +21,7 @@ grip:
     initial-backoff: 1s
     max-backoff: 30s
     heartbeat-interval: 15s
+    heartbeat-timeout: 45s   # no frame from the Controller for this long -> drop and reconnect
 
 management:
   endpoints:

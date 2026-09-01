@@ -76,10 +76,15 @@ sequenceDiagram
   cannot hold a request and response open at once — see
   [the protocol page](protocol.md).)
 - If the connection drops, the Agent reconnects with exponential backoff
-  (`initial-backoff` → `max-backoff`).
-- Missing heartbeats let either side detect a dead peer before TCP would.
-- The exact REGISTER/heartbeat frames are a protocol detail fixed in Stage 3;
-  the *lifecycle* above is decided.
+  (`initial-backoff` → `max-backoff`, with jitter). A permanent rejection
+  (bad id, bad version, reserved name) stops the loop; a duplicate or a
+  transient failure does not.
+- The Agent sends `PING` every `heartbeat-interval`; no frame from the
+  Controller within `heartbeat-timeout` drops the connection. The Controller
+  independently closes an Agent that has sent nothing within `agent-timeout`.
+- The REGISTER/heartbeat *frames* are provisional line text
+  (`dev.grip.protocol.wire.ControlFrame`) until the Stage 3 binary codec; the
+  *lifecycle* above is decided.
 
 ## 3. External HTTP request flow
 

@@ -5,6 +5,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -71,6 +73,10 @@ public class AgentRegistry {
 
     public Set<String> connectedIds() {
         return Set.copyOf(byId.keySet());
+    }
+
+    public Collection<AgentConnection> connections() {
+        return List.copyOf(byId.values());
     }
 
     public int size() {

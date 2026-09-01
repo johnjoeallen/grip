@@ -44,7 +44,8 @@ Until the proxying issues land, the services boot and expose health only.
 |---|---|---|
 | `grip.base-domain` | `grip.example.com` | Domain under which Agents are exposed. `alpha.<base-domain>` → Agent `alpha`. **Set this.** |
 | `grip.connect.heartbeat-interval` | `15s` | Expected heartbeat cadence |
-| `grip.connect.agent-timeout` | `45s` | No heartbeat for this long ⇒ Agent considered gone |
+| `grip.connect.agent-timeout` | `45s` | No frame from an Agent for this long ⇒ connection closed |
+| `grip.connect.reaper-interval` | `PT5S` | How often to scan for silent Agents (ISO-8601) |
 | `server.port` | `8443` | Controller listen port |
 
 ### Agent (`grip.*`)
@@ -57,6 +58,7 @@ Until the proxying issues land, the services boot and expose health only.
 | `grip.reconnect.initial-backoff` | `1s` | First retry delay |
 | `grip.reconnect.max-backoff` | `30s` | Backoff ceiling |
 | `grip.reconnect.heartbeat-interval` | `15s` | Heartbeat cadence on an idle connection |
+| `grip.reconnect.heartbeat-timeout` | `45s` | No frame from the Controller for this long ⇒ drop and reconnect |
 | `server.address` / `server.port` | `127.0.0.1` / `8081` | Localhost-only health endpoint |
 
 Override with `application.yml`, environment variables

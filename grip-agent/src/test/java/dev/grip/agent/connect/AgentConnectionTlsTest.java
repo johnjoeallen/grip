@@ -45,7 +45,8 @@ class AgentConnectionTlsTest {
                 .build();
 
         AgentConnection connection = new AgentConnection(
-                client, URI.create("https://localhost:" + port), "alpha", Duration.ofSeconds(5));
+                client, URI.create("https://localhost:" + port), "alpha",
+                Duration.ofSeconds(5), Duration.ofSeconds(15), Duration.ofSeconds(45));
 
         assertThatThrownBy(() -> connection.connect())
                 .satisfiesAnyOf(

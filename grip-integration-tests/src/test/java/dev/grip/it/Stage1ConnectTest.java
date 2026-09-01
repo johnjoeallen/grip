@@ -52,7 +52,8 @@ class Stage1ConnectTest {
 
     private AgentConnection agent(String agentId) {
         AgentConnection c = new AgentConnection(
-                client, URI.create("https://localhost:" + port), agentId, Duration.ofSeconds(15));
+                client, URI.create("https://localhost:" + port), agentId,
+                Duration.ofSeconds(15), Duration.ofSeconds(1), Duration.ofSeconds(20));
         opened.add(c);
         return c;
     }
@@ -83,6 +84,22 @@ class Stage1ConnectTest {
         alpha.send(ControlFrame.of("PING"));
 
         await().atMost(Duration.ofSeconds(5)).until(() -> alpha.lastInbound().isAfter(before));
+    }
+
+    @Test
+    void theAutomaticHeartbeatKeepsTheConnectionAlive() throws Exception {
+        AgentConnection alpha = agent("alpha");   // 1s heartbeat interval, 20s timeout
+        alpha.connect();
+        alpha.awaitRegistered(Duration.ofSeconds(10));
+
+        // No manual traffic — the connection's own heartbeat must keep it up
+        // and keep lastInbound fresh (Controller answers each PING with PONG).
+        Thread.sleep(3_500);
+
+        assertThat(alpha.state()).isEqualTo(ConnectionState.REGISTERED);
+        assertThat(java.time.Duration.between(alpha.lastInbound(), java.time.Instant.now()))
+                .isLessThan(Duration.ofSeconds(3));
+        assertThat(registry.get("alpha")).isPresent();
     }
 
     @Test

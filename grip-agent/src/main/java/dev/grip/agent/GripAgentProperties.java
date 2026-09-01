@@ -24,16 +24,20 @@ public record GripAgentProperties(String agentId, URI controllerUrl, URI targetU
             throw new IllegalArgumentException("grip.controller-url must be https, got: " + controllerUrl);
         }
         if (reconnect == null) {
-            reconnect = new Reconnect(null, null, null);
+            reconnect = new Reconnect(null, null, null, null);
         }
     }
 
     /**
-     * @param initialBackoff first retry delay after a lost connection
-     * @param maxBackoff     ceiling for the exponential backoff
+     * @param initialBackoff    first retry delay after a lost connection
+     * @param maxBackoff        ceiling for the exponential backoff
      * @param heartbeatInterval how often to send a heartbeat on an idle connection
+     * @param heartbeatTimeout  no inbound frame for this long ⇒ the connection
+     *                          is considered dead and is dropped (triggering a
+     *                          reconnect)
      */
-    public record Reconnect(Duration initialBackoff, Duration maxBackoff, Duration heartbeatInterval) {
+    public record Reconnect(Duration initialBackoff, Duration maxBackoff,
+            Duration heartbeatInterval, Duration heartbeatTimeout) {
 
         public Reconnect {
             if (initialBackoff == null) {
@@ -44,6 +48,9 @@ public record GripAgentProperties(String agentId, URI controllerUrl, URI targetU
             }
             if (heartbeatInterval == null) {
                 heartbeatInterval = Duration.ofSeconds(15);
+            }
+            if (heartbeatTimeout == null) {
+                heartbeatTimeout = Duration.ofSeconds(45);
             }
         }
     }

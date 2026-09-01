@@ -64,6 +64,11 @@ public final class AgentConnection {
         this.lastInbound = Instant.now();
     }
 
+    /** Test hook: pretend nothing has arrived for a long time. */
+    void markStaleForTest() {
+        this.lastInbound = Instant.EPOCH;
+    }
+
     /** Serialised so heartbeat and lifecycle frames never interleave on the wire. */
     public void send(ControlFrame frame) {
         synchronized (writeLock) {

@@ -20,7 +20,8 @@ grip:
   base-domain: grip.example.com
   connect:
     heartbeat-interval: 15s
-    agent-timeout: 45s
+    agent-timeout: 45s        # no frame from an Agent for this long -> close the connection
+    reaper-interval: PT5S     # how often to scan for silent Agents (ISO-8601)
 
 management:
   endpoints:
