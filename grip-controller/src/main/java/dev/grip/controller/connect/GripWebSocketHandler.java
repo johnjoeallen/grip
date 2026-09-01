@@ -1,6 +1,8 @@
 package dev.grip.controller.connect;
 
 import dev.grip.protocol.wire.ControlFrame;
+import dev.grip.protocol.wire.ProxyCodec;
+import dev.grip.protocol.wire.ProxyMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -42,9 +44,21 @@ public class GripWebSocketHandler extends TextWebSocketHandler {
         if (connection == null) {
             return;
         }
+        String payload = message.getPayload();
+
+        if (ProxyCodec.isProxyMessage(payload)) {
+            try {
+                ProxyMessage decoded = ProxyCodec.decode(payload);
+                connection.deliverProxy(decoded);
+            } catch (RuntimeException e) {
+                log.warn("undecodable proxy message from {}: {}", connection.remote(), e.toString());
+            }
+            return;
+        }
+
         ControlFrame frame;
         try {
-            frame = ControlFrame.parse(message.getPayload());
+            frame = ControlFrame.parse(payload);
         } catch (RuntimeException e) {
             log.debug("bad frame from {}: {}", connection.remote(), message.getPayload());
             if (connection.state() == AgentConnection.State.NEW) {

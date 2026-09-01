@@ -1,6 +1,7 @@
 package dev.grip.it;
 
 import dev.grip.agent.connect.AgentConnection;
+import dev.grip.agent.connect.ConnectionConfig;
 import dev.grip.agent.connect.ConnectionState;
 import dev.grip.controller.GripControllerApplication;
 import dev.grip.controller.connect.AgentRegistry;
@@ -51,9 +52,9 @@ class Stage1ConnectTest {
     private final List<AgentConnection> opened = new ArrayList<>();
 
     private AgentConnection agent(String agentId) {
-        AgentConnection c = new AgentConnection(
-                client, URI.create("https://localhost:" + port), agentId,
-                Duration.ofSeconds(15), Duration.ofSeconds(1), Duration.ofSeconds(20));
+        AgentConnection c = new AgentConnection(client, new ConnectionConfig(
+                URI.create("https://localhost:" + port), URI.create("http://localhost:1"), agentId,
+                Duration.ofSeconds(15), Duration.ofSeconds(1), Duration.ofSeconds(20)));
         opened.add(c);
         return c;
     }

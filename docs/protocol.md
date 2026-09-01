@@ -65,6 +65,22 @@ one frame per WebSocket text message:
 `agentId` must match `[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?` and must not be a
 reserved name (`www`, `api`, `controller`, `health`, `admin`, `grip`).
 
+**Stage 2 provisional proxy framing.** The first end-to-end request slice uses
+`dev.grip.protocol.wire.ProxyMessage` + `ProxyCodec`: one JSON object per
+WebSocket text message, telling proxy messages from control frames by a
+leading `{`.
+
+| Message | Direction | Shape |
+|---|---|---|
+| `{"t":"req","ch":…,"method":…,"target":"/path?q",…,"body":"<base64>"}` | Controller → Agent | whole request |
+| `{"t":"resp","ch":…,"status":…,"headers":…,"body":"<base64>"}` | Agent → Controller | whole response |
+| `{"t":"fail","ch":…,"code":"BAD_GATEWAY","message":…}` | Agent → Controller | internal call failed |
+
+This is a throwaway: **one in-flight request per Agent** (a second gets
+`503`), bodies buffered and base64'd. Stage 3 replaces it with the streamed
+binary frames and bodies stop being base64; Stage 4 lifts the single-request
+limit.
+
 ### Streaming
 
 - Neither side buffers a whole request or response.

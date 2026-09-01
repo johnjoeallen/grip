@@ -72,9 +72,9 @@ public class AgentConnectionManager {
 
         while (!stopping) {
             Instant attemptStart = Instant.now();
-            AgentConnection connection = new AgentConnection(
-                    http, properties.controllerUrl(), properties.agentId(),
-                    Duration.ofSeconds(20), cfg.heartbeatInterval(), cfg.heartbeatTimeout());
+            AgentConnection connection = new AgentConnection(http, new ConnectionConfig(
+                    properties.controllerUrl(), properties.targetUrl(), properties.agentId(),
+                    Duration.ofSeconds(20), cfg.heartbeatInterval(), cfg.heartbeatTimeout()));
             current.set(connection);
 
             try {
