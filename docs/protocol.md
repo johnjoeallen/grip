@@ -8,12 +8,21 @@ format is designed in [Stage 3](roadmap.md), not up front.
 
 ### Shape
 
-- A GRIP connection is a **single long-lived bidirectional HTTP stream**,
-  opened by the Agent to the Controller over TLS.
+- A GRIP connection is a **single WebSocket over TLS** (`wss://`), opened by
+  the Agent to the Controller.
 - The connection carries a sequence of **frames**.
 - The connection multiplexes many **channels**. One channel = one in-flight
   external HTTP request/response.
 - There is **no** requirement of one connection per external request.
+
+!!! note "Why WebSocket and not a plain HTTP stream"
+    The original intent was one long-lived HTTP request with both bodies held
+    open. That is not implementable with the JDK HTTP client (`java.net.http`),
+    which always finishes sending a request before it surfaces the response —
+    there is no full-duplex HTTP mode. WebSocket is genuinely full-duplex over
+    one connection, is still Agent-initiated and plain `wss://`, and passes
+    the corporate proxies that allow Slack/Teams. Everything else about the
+    protocol — frames, channels, multiplexing, cancellation — is unchanged.
 
 ### Channels
 
@@ -38,7 +47,23 @@ format is designed in [Stage 3](roadmap.md), not up front.
 | `PING` / `PONG` | connection | Heartbeat / liveness |
 
 Connection-level control for **REGISTER** (Agent identity) and heartbeat
-details are part of the same frame model; their encoding is fixed in Stage 3.
+details are part of the same frame model; their binary encoding is fixed in
+Stage 3.
+
+**Stage 1 provisional framing.** Until the binary codec lands, connection
+lifecycle uses a line-oriented placeholder (`dev.grip.protocol.wire.ControlFrame`),
+one frame per WebSocket text message:
+
+| Frame | Direction | Meaning |
+|---|---|---|
+| `REGISTER <agentId> <version>` | Agent → Controller | first frame; claims an id |
+| `REGISTER_OK` | Controller → Agent | admitted |
+| `REGISTER_REJECTED <reason>` | Controller → Agent | `DUPLICATE_AGENT_ID` \| `UNSUPPORTED_VERSION` \| `MALFORMED` \| `RESERVED_AGENT_ID`, then close |
+| `PING` / `PONG` | either | heartbeat |
+| `BYE` | either | graceful close |
+
+`agentId` must match `[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?` and must not be a
+reserved name (`www`, `api`, `controller`, `health`, `admin`, `grip`).
 
 ### Streaming
 
@@ -48,11 +73,14 @@ details are part of the same frame model; their encoding is fixed in Stage 3.
 
 ### Transport
 
-- Ordinary HTTP streaming over TLS.
-- HTTP/2 **may** be used where it simplifies a persistent multiplexed
-  connection, but the GRIP framing must not depend on HTTP/2-specific
-  semantics — it must remain meaningful over a single HTTP/1.1 streamed
-  request/response pair.
+- A single WebSocket over TLS, opened by the Agent to
+  `wss://<controller>/grip/connect`.
+- The GRIP framing is carried in WebSocket messages and does not depend on any
+  WebSocket-specific semantics beyond "ordered, reliable, bidirectional
+  messages" — it could move to another such carrier without changing the
+  frames.
+- The Agent opens exactly one WebSocket. WebSocket's own ping/pong is separate
+  from GRIP's `PING`/`PONG` frames (which also drive Agent-liveness tracking).
 
 ### TLS
 
@@ -73,8 +101,11 @@ These are **open on purpose**. Picking them now would be guessing.
   underlying stream's flow control. Addressed in Stage 5.
 - **Channel ID allocation** — monotonic vs. free-list reuse, and the exact
   width (`ChannelId` currently wraps a `long` as a placeholder).
-- **REGISTER exchange** — fields, versioning handshake, rejection reasons.
-- **Error codes** — the enumerated set for `ERROR` and for `REGISTER_REJECTED`.
+- **REGISTER exchange** — the Stage 1 line form above is provisional; the
+  binary encoding, any richer handshake (capabilities, auth), and whether it
+  moves off a plain text message are for Stage 3.
+- **Error codes** — the enumerated set for `ERROR` (the `REGISTER_REJECTED`
+  reasons are settled).
 - **Settings/negotiation** — max frame size, max concurrent channels, heartbeat
   interval: fixed constants for now (`GripProtocol`), negotiated later if
   needed.

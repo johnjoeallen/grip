@@ -48,4 +48,24 @@
         </dependency>
     </dependencies>
 
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <!-- Trust only the checked-in GRIP test CA. The end-to-end
+                             tests connect the Agent to a Controller using the test
+                             keystore; the Agent still does full default-trust-manager
+                             validation, it just trusts this store. -->
+                        <javax.net.ssl.trustStore>${project.basedir}/src/test/resources/tls/truststore.p12</javax.net.ssl.trustStore>
+                        <javax.net.ssl.trustStorePassword>changeit</javax.net.ssl.trustStorePassword>
+                        <javax.net.ssl.trustStoreType>PKCS12</javax.net.ssl.trustStoreType>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
 </project>

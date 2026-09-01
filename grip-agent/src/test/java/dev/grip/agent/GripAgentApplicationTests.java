@@ -6,7 +6,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@SpringBootTest(properties = "server.port=0")
+@SpringBootTest(properties = {"server.port=0", "grip.auto-connect=false"})
 class GripAgentApplicationTests {
 
     @Autowired
