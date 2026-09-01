@@ -5,7 +5,7 @@ import dev.grip.agent.connect.ConnectionConfig;
 import dev.grip.agent.connect.ConnectionState;
 import dev.grip.controller.GripControllerApplication;
 import dev.grip.controller.connect.AgentRegistry;
-import dev.grip.protocol.wire.ControlFrame;
+import dev.grip.protocol.wire.Frame;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -82,7 +82,7 @@ class Stage1ConnectTest {
         alpha.awaitRegistered(Duration.ofSeconds(10));
 
         var before = alpha.lastInbound();
-        alpha.send(ControlFrame.of("PING"));
+        alpha.send(new Frame.Ping(1));
 
         await().atMost(Duration.ofSeconds(5)).until(() -> alpha.lastInbound().isAfter(before));
     }

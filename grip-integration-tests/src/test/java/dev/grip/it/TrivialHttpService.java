@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * A minimal internal HTTP service, standing in for whatever a real Agent would
@@ -25,6 +26,7 @@ import java.nio.charset.StandardCharsets;
 public final class TrivialHttpService implements AutoCloseable {
 
     private final HttpServer server;
+    private final AtomicInteger active = new AtomicInteger();
 
     private TrivialHttpService(HttpServer server) {
         this.server = server;
@@ -32,6 +34,7 @@ public final class TrivialHttpService implements AutoCloseable {
 
     public static TrivialHttpService start() throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        TrivialHttpService service = new TrivialHttpService(server);
         server.createContext("/status", exchange -> respond(exchange, 200, "ok"));
         server.createContext("/echo", exchange -> {
             byte[] body = exchange.getRequestBody().readAllBytes();
@@ -43,15 +46,39 @@ public final class TrivialHttpService implements AutoCloseable {
         });
         server.createContext("/slow", exchange -> {
             long ms = queryMillis(exchange.getRequestURI().getQuery());
+            service.active.incrementAndGet();
             try {
-                Thread.sleep(ms);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+                exchange.sendResponseHeaders(200, 0);
+                OutputStream os = exchange.getResponseBody();
+                long deadline = System.currentTimeMillis() + ms;
+                // Trickle so a client disconnect (a cancelled internal call)
+                // is noticed promptly instead of after the full delay.
+                while (System.currentTimeMillis() < deadline) {
+                    os.write(' ');
+                    os.flush();
+                    try {
+                        Thread.sleep(50);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+                os.write("done".getBytes(StandardCharsets.UTF_8));
+                os.close();
+            } catch (IOException disconnected) {
+                // client went away — fine
+            } finally {
+                service.active.decrementAndGet();
+                exchange.close();
             }
-            respond(exchange, 200, "ok");
         });
         server.start();
-        return new TrivialHttpService(server);
+        return service;
+    }
+
+    /** Number of requests currently being served (used by cancellation tests). */
+    public int activeRequests() {
+        return active.get();
     }
 
     public int port() {

@@ -16,7 +16,7 @@ class HostRouterTest {
 
     private AgentConnection connect(String id) {
         AgentConnection c = new AgentConnection("test", new FrameSink() {
-            public void send(String line) { }
+            public void send(dev.grip.protocol.wire.Frame frame) { }
             public void close() { }
         });
         registry.register(id, c);

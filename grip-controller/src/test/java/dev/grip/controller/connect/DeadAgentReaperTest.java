@@ -1,7 +1,7 @@
 package dev.grip.controller.connect;
 
 import dev.grip.controller.GripControllerProperties;
-import dev.grip.protocol.wire.ControlFrame;
+import dev.grip.protocol.wire.Frame;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -18,10 +18,10 @@ class DeadAgentReaperTest {
 
     private AgentConnection register(String id) {
         AgentConnection c = new AgentConnection("test", new FrameSink() {
-            public void send(String line) { }
+            public void send(Frame frame) { }
             public void close() { }
         });
-        handler.register(c, ControlFrame.of("REGISTER", id, "0"));
+        handler.register(c, new Frame.Register(0, id));
         return c;
     }
 

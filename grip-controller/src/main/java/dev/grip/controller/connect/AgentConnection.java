@@ -1,25 +1,20 @@
 package dev.grip.controller.connect;
 
-import dev.grip.protocol.wire.ControlFrame;
-import dev.grip.protocol.wire.ProxyCodec;
-import dev.grip.protocol.wire.ProxyMessage;
+import dev.grip.protocol.wire.CancelReason;
+import dev.grip.protocol.wire.Frame;
 import dev.grip.protocol.wire.RegisterRejectReason;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.time.Instant;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * One Agent's connection to the Controller, server side. Created when the
- * WebSocket opens; lives until either side closes it.
- *
- * <p>Stage 1 carries only connection-lifecycle frames over the
- * {@link ControlFrame provisional line framing}.
+ * WebSocket opens; lives until either side closes it. Frames are the
+ * {@link Frame} binary format.
  */
 public final class AgentConnection {
 
@@ -36,12 +31,9 @@ public final class AgentConnection {
     private volatile Instant lastInbound = Instant.now();
     private final AtomicReference<String> closeReason = new AtomicReference<>();
 
-    // Stage 2: a single in-flight proxied request per connection.
+    // Stage 2/3: a single in-flight proxied request per connection (multiplexing is Stage 4).
     private final AtomicLong channelSeq = new AtomicLong(1000);
-    private final AtomicReference<Exchange> exchange = new AtomicReference<>();
-
-    /** One in-flight proxied request. */
-    public record Exchange(long channel, CompletableFuture<ProxyMessage> reply) { }
+    private final AtomicReference<ProxyExchange> exchange = new AtomicReference<>();
 
     public AgentConnection(String remote, FrameSink sink) {
         this.remote = remote;
@@ -77,19 +69,18 @@ public final class AgentConnection {
         this.lastInbound = Instant.now();
     }
 
-    /** Test hook: pretend nothing has arrived for a long time. */
     void markStaleForTest() {
         this.lastInbound = Instant.EPOCH;
     }
 
-    /** Serialised so heartbeat and lifecycle frames never interleave on the wire. */
-    public void send(ControlFrame frame) {
+    /** Serialised so frames never interleave on the wire. */
+    public void send(Frame frame) {
         synchronized (writeLock) {
             if (state == State.CLOSED) {
                 return;
             }
             try {
-                sink.send(frame.encode().strip());
+                sink.send(frame);
             } catch (RuntimeException e) {
                 log.debug("send to {} failed: {}", describe(), e.toString());
                 closeQuietly("send-failed");
@@ -97,9 +88,11 @@ public final class AgentConnection {
         }
     }
 
-    /** Claims the single Stage 2 channel, or empty if a request is already in flight. */
-    public Optional<Exchange> beginExchange() {
-        Exchange candidate = new Exchange(channelSeq.incrementAndGet(), new CompletableFuture<>());
+    // ---- proxying ----
+
+    /** Claims the single Stage 3 channel, or empty if a request is already in flight. */
+    public Optional<ProxyExchange> beginExchange() {
+        ProxyExchange candidate = new ProxyExchange(channelSeq.incrementAndGet());
         return exchange.compareAndSet(null, candidate) ? Optional.of(candidate) : Optional.empty();
     }
 
@@ -107,30 +100,27 @@ public final class AgentConnection {
         exchange.updateAndGet(current -> current != null && current.channel() == channel ? null : current);
     }
 
-    /** Routes a proxy reply from the Agent to the waiting request thread. */
-    public void deliverProxy(ProxyMessage message) {
-        Exchange current = exchange.get();
-        if (current != null && current.channel() == message.channel()) {
-            current.reply().complete(message);
+    /** Routes a channel-scoped frame from the Agent to the waiting request. */
+    public void deliverFrame(Frame frame) {
+        ProxyExchange current = exchange.get();
+        if (current != null && current.channel() == frame.channel()) {
+            current.accept(frame);
         }
     }
 
-    public void sendProxy(ProxyMessage message) {
-        synchronized (writeLock) {
-            if (state == State.CLOSED) {
-                return;
-            }
-            try {
-                sink.send(ProxyCodec.encode(message));
-            } catch (RuntimeException e) {
-                log.debug("proxy send to {} failed: {}", describe(), e.toString());
-                closeQuietly("send-failed");
-            }
+    /** Tells the Agent to abandon the in-flight channel (client gone, shutdown, …). */
+    public void cancelInFlight(CancelReason reason) {
+        ProxyExchange current = exchange.get();
+        if (current != null) {
+            send(new Frame.Cancel(current.channel(), reason));
+            current.cancelledLocally(reason);
         }
     }
+
+    // ---- lifecycle ----
 
     public void reject(RegisterRejectReason reason) {
-        send(ControlFrame.of("REGISTER_REJECTED", reason.name()));
+        send(new Frame.RegisterRejected(reason));
         close("rejected:" + reason.name());
     }
 
@@ -140,9 +130,9 @@ public final class AgentConnection {
         }
         closeReason.compareAndSet(null, reason);
         state = State.CLOSED;
-        Exchange pending = exchange.getAndSet(null);
-        if (pending != null && !pending.reply().isDone()) {
-            pending.reply().completeExceptionally(new IOException("agent connection closed: " + reason));
+        ProxyExchange pending = exchange.getAndSet(null);
+        if (pending != null) {
+            pending.failClosed(reason);
         }
         synchronized (writeLock) {
             try {

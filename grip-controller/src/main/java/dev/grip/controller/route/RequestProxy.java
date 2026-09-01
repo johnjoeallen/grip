@@ -1,7 +1,11 @@
 package dev.grip.controller.route;
 
 import dev.grip.controller.connect.AgentConnection;
-import dev.grip.protocol.wire.ProxyMessage;
+import dev.grip.controller.connect.ProxyExchange;
+import dev.grip.protocol.wire.CancelReason;
+import dev.grip.protocol.wire.ErrorCode;
+import dev.grip.protocol.wire.Frame;
+import dev.grip.protocol.wire.Headers;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
@@ -10,19 +14,16 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.util.Collections;
-import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
-import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * Proxies one external request over a resolved Agent connection and writes the
- * reply to the external response.
+ * Proxies one external request over a resolved Agent connection as GRIP frames
+ * and writes the reply to the external response.
  *
- * <p>Stage 2: one in-flight request per Agent (a second gets {@code 503}),
+ * <p>Stage 3: one in-flight request per Agent (a second gets {@code 503}),
  * bodies buffered. Multiplexing is Stage 4, streaming Stage 5, header hygiene
  * Stage 8.
  */
@@ -45,34 +46,65 @@ public class RequestProxy {
         var claimed = connection.beginExchange();
         if (claimed.isEmpty()) {
             ProblemResponse.write(response, 503, "Agent busy",
-                    "Agent '" + agentId + "' is already handling a request (Stage 2 is single-channel).");
+                    "Agent '" + agentId + "' is already handling a request (Stage 3 is single-channel).");
             return;
         }
-        AgentConnection.Exchange exchange = claimed.get();
+        ProxyExchange exchange = claimed.get();
+        long channel = exchange.channel();
         try {
-            ProxyMessage.Request forwarded = new ProxyMessage.Request(
-                    exchange.channel(), request.getMethod(), pathAndQuery(request),
-                    requestHeaders(request), request.getInputStream().readAllBytes());
-            connection.sendProxy(forwarded);
-
-            ProxyMessage reply = exchange.reply().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            switch (reply) {
-                case ProxyMessage.Response r -> writeResponse(response, r);
-                case ProxyMessage.Failure f -> ProblemResponse.write(response, 502, "Bad gateway", f.message());
-                default -> ProblemResponse.write(response, 502, "Bad gateway", "unexpected reply from agent");
+            byte[] body = request.getInputStream().readAllBytes();
+            connection.send(new Frame.RequestStart(channel, request.getMethod(),
+                    pathAndQuery(request), requestHeaders(request)));
+            if (body.length > 0) {
+                connection.send(new Frame.RequestData(channel, body));
             }
+            connection.send(new Frame.RequestEnd(channel));
+
+            ProxyExchange.Result result = exchange.result().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            writeResult(response, agentId, result);
         } catch (TimeoutException e) {
+            connection.send(new Frame.Cancel(channel, CancelReason.UNSPECIFIED));
             ProblemResponse.write(response, 504, "Gateway timeout",
                     "Agent '" + agentId + "' did not respond within " + TIMEOUT_SECONDS + "s.");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            connection.send(new Frame.Cancel(channel, CancelReason.SHUTDOWN));
             ProblemResponse.write(response, 502, "Bad gateway", "interrupted");
+        } catch (IOException e) {
+            // Writing to the client failed — it went away.
+            connection.cancelInFlight(CancelReason.CLIENT_GONE);
+            log.debug("client gone on channel {}: {}", channel, e.toString());
         } catch (Exception e) {
-            log.warn("proxy to agent {} failed on channel {}: {}", agentId, exchange.channel(), e.toString());
+            log.warn("proxy to agent {} failed on channel {}: {}", agentId, channel, e.toString());
             ProblemResponse.write(response, 502, "Bad gateway", rootMessage(e));
         } finally {
-            connection.endExchange(exchange.channel());
+            connection.endExchange(channel);
         }
+    }
+
+    private void writeResult(HttpServletResponse response, String agentId, ProxyExchange.Result result)
+            throws IOException {
+        switch (result) {
+            case ProxyExchange.Result.Ok ok -> writeOk(response, ok);
+            case ProxyExchange.Result.Failed failed -> {
+                int status = failed.code() == ErrorCode.GATEWAY_TIMEOUT ? 504 : 502;
+                ProblemResponse.write(response, status,
+                        status == 504 ? "Gateway timeout" : "Bad gateway", failed.message());
+            }
+            case ProxyExchange.Result.Cancelled cancelled -> ProblemResponse.write(response, 502, "Bad gateway",
+                    "Agent '" + agentId + "' cancelled the request (" + cancelled.reason() + ").");
+        }
+    }
+
+    private void writeOk(HttpServletResponse response, ProxyExchange.Result.Ok ok) throws IOException {
+        response.setStatus(ok.status());
+        ok.headers().forEach((name, value) -> {
+            if (!DROP_RESPONSE.contains(name.toLowerCase(Locale.ROOT))) {
+                response.addHeader(name, value);
+            }
+        });
+        response.setContentLength(ok.body().length);
+        response.getOutputStream().write(ok.body());
     }
 
     private static String pathAndQuery(HttpServletRequest request) {
@@ -80,29 +112,19 @@ public class RequestProxy {
         return request.getQueryString() == null ? uri : uri + "?" + request.getQueryString();
     }
 
-    private static Map<String, List<String>> requestHeaders(HttpServletRequest request) {
-        Map<String, List<String>> out = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+    private static Headers requestHeaders(HttpServletRequest request) {
+        Headers headers = new Headers();
         var names = request.getHeaderNames();
         while (names.hasMoreElements()) {
             String name = names.nextElement();
             if (DROP_REQUEST.contains(name.toLowerCase(Locale.ROOT))) {
                 continue;
             }
-            out.put(name, Collections.list(request.getHeaders(name)));
-        }
-        return out;
-    }
-
-    private static void writeResponse(HttpServletResponse response, ProxyMessage.Response reply) throws IOException {
-        response.setStatus(reply.status());
-        reply.headers().forEach((name, values) -> {
-            if (!DROP_RESPONSE.contains(name.toLowerCase(Locale.ROOT))) {
-                values.forEach(v -> response.addHeader(name, v));
+            for (String value : Collections.list(request.getHeaders(name))) {
+                headers.add(name, value);
             }
-        });
-        byte[] body = reply.body();
-        response.setContentLength(body.length);
-        response.getOutputStream().write(body);
+        }
+        return headers;
     }
 
     private static String rootMessage(Throwable t) {

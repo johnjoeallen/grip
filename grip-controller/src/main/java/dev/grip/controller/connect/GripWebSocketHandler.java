@@ -1,26 +1,26 @@
 package dev.grip.controller.connect;
 
-import dev.grip.protocol.wire.ControlFrame;
-import dev.grip.protocol.wire.ProxyCodec;
-import dev.grip.protocol.wire.ProxyMessage;
+import dev.grip.protocol.wire.Frame;
+import dev.grip.protocol.wire.FrameCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
-import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
-import org.springframework.web.socket.handler.TextWebSocketHandler;
+import org.springframework.web.socket.handler.BinaryWebSocketHandler;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 
 /**
  * The WebSocket endpoint an Agent connects to
- * ({@link dev.grip.protocol.GripProtocol#AGENT_CONNECT_PATH}). A thin adapter:
- * every concern beyond moving frames on and off the session lives in
- * {@link AgentConnectHandler}.
+ * ({@link dev.grip.protocol.GripProtocol#AGENT_CONNECT_PATH}). Each binary
+ * message is one {@link Frame}. A thin adapter: everything else lives in
+ * {@link AgentConnectHandler} and {@link AgentConnection}.
  */
 @Component
-public class GripWebSocketHandler extends TextWebSocketHandler {
+public class GripWebSocketHandler extends BinaryWebSocketHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GripWebSocketHandler.class);
     private static final String CONNECTION = "grip.connection";
@@ -39,35 +39,29 @@ public class GripWebSocketHandler extends TextWebSocketHandler {
     }
 
     @Override
-    protected void handleTextMessage(WebSocketSession session, TextMessage message) {
+    protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) {
         AgentConnection connection = connection(session);
         if (connection == null) {
             return;
         }
-        String payload = message.getPayload();
-
-        if (ProxyCodec.isProxyMessage(payload)) {
-            try {
-                ProxyMessage decoded = ProxyCodec.decode(payload);
-                connection.deliverProxy(decoded);
-            } catch (RuntimeException e) {
-                log.warn("undecodable proxy message from {}: {}", connection.remote(), e.toString());
-            }
-            return;
-        }
-
-        ControlFrame frame;
+        Frame frame;
         try {
-            frame = ControlFrame.parse(payload);
+            ByteBuffer payload = message.getPayload();
+            byte[] bytes = new byte[payload.remaining()];
+            payload.get(bytes);
+            frame = FrameCodec.decode(bytes);
         } catch (RuntimeException e) {
-            log.debug("bad frame from {}: {}", connection.remote(), message.getPayload());
-            if (connection.state() == AgentConnection.State.NEW) {
-                connection.reject(dev.grip.protocol.wire.RegisterRejectReason.MALFORMED);
-            }
+            log.warn("protocol error from {}: {} — closing", connection.remote(), e.toString());
+            handler.closed(connection, "protocol-error");
             return;
         }
+
         if (connection.state() == AgentConnection.State.NEW) {
             handler.register(connection, frame);
+            return;
+        }
+        if (frame.type().isChannelScoped()) {
+            connection.deliverFrame(frame);
         } else {
             handler.frame(connection, frame);
         }
@@ -106,9 +100,9 @@ public class GripWebSocketHandler extends TextWebSocketHandler {
         }
 
         @Override
-        public void send(String line) {
+        public void send(Frame frame) {
             try {
-                session.sendMessage(new TextMessage(line));
+                session.sendMessage(new BinaryMessage(FrameCodec.encode(frame)));
             } catch (IOException e) {
                 throw new IllegalStateException(e);
             }

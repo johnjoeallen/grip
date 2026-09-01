@@ -33,7 +33,7 @@ class ExternalRequestFilterTest {
 
     private void connect(String id) {
         registry.register(id, new AgentConnection("test", new FrameSink() {
-            public void send(String line) { }
+            public void send(dev.grip.protocol.wire.Frame frame) { }
             public void close() { }
         }));
     }

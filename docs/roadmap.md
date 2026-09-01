@@ -10,7 +10,7 @@ map.
 | **0 — Foundation** | Maven multi-module skeleton, Controller/Agent/protocol modules that boot, CI, docs site | **done** |
 | **1 — Agent connection** | Agent dials out over TLS (WebSocket), registers, heartbeats, reconnects with backoff | **done** |
 | **2 — Single proxied request** | One request end to end: client → Controller → Agent → internal service → back. One active request per Agent. | **done** |
-| **3 — Framing protocol** | An explicit GRIP frame format and codec; `CANCEL` and `ERROR` wired through | planned |
+| **3 — Framing protocol** | An explicit GRIP frame format and codec; `CANCEL` and `ERROR` wired through | **done** |
 | **4 — Multiplexing** | Many requests over one Agent connection; `channel → context` on both sides; out-of-order responses | planned |
 | **5 — Streaming & backpressure** | Bodies streamed not buffered; frame/header/channel/queue limits; slow-client safety | planned |
 | **6 — Host routing** | Configurable `{agent}.<base-domain>` routing; unknown/disconnected/invalid/reserved handling | planned |

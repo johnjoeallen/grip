@@ -1,7 +1,7 @@
 package dev.grip.controller.connect;
 
 import dev.grip.protocol.GripProtocol;
-import dev.grip.protocol.wire.ControlFrame;
+import dev.grip.protocol.wire.Frame;
 import dev.grip.protocol.wire.RegisterRejectReason;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,8 +10,7 @@ import org.springframework.stereotype.Component;
 /**
  * Transport-independent Agent-connection logic: admit or reject a REGISTER,
  * then service lifecycle frames. Unit-tested directly against an {@link
- * AgentConnection} backed by a fake {@link FrameSink}; the WebSocket wiring is
- * a thin adapter over this.
+ * AgentConnection} backed by a fake {@link FrameSink}.
  */
 @Component
 public class AgentConnectHandler {
@@ -25,36 +24,34 @@ public class AgentConnectHandler {
     }
 
     /** Handles the first frame on a new connection. Returns true once registered. */
-    public boolean register(AgentConnection connection, ControlFrame frame) {
+    public boolean register(AgentConnection connection, Frame frame) {
         connection.touch();
-        if (!frame.is("REGISTER") || frame.arg(0) == null || frame.arg(1) == null) {
+        if (!(frame instanceof Frame.Register register)) {
             connection.reject(RegisterRejectReason.MALFORMED);
             return false;
         }
-        if (!String.valueOf(GripProtocol.VERSION).equals(frame.arg(1))) {
+        if (register.protocolVersion() != GripProtocol.VERSION) {
             connection.reject(RegisterRejectReason.UNSUPPORTED_VERSION);
             return false;
         }
-        AgentRegistry.Result result = registry.register(frame.arg(0), connection);
+        AgentRegistry.Result result = registry.register(register.agentId(), connection);
         if (result instanceof AgentRegistry.Result.Rejected rejected) {
             log.info("REGISTER rejected for '{}' from {}: {}",
-                    frame.arg(0), connection.remote(), rejected.reason());
+                    register.agentId(), connection.remote(), rejected.reason());
             connection.reject(rejected.reason());
             return false;
         }
-        connection.send(ControlFrame.of("REGISTER_OK"));
+        connection.send(new Frame.RegisterOk());
         return true;
     }
 
-    /** Handles a steady-state frame from a registered Agent. */
-    public void frame(AgentConnection connection, ControlFrame frame) {
+    /** Handles a connection-scoped frame from a registered Agent. */
+    public void frame(AgentConnection connection, Frame frame) {
         connection.touch();
-        if (frame.is("PING")) {
-            connection.send(ControlFrame.of("PONG"));
-        } else if (frame.is("BYE")) {
-            connection.close("agent-bye");
-        } else if (!frame.is("PONG")) {
-            log.debug("ignoring frame '{}' from {}", frame.verb(), connection.agentId());
+        if (frame instanceof Frame.Ping ping) {
+            connection.send(new Frame.Pong(ping.nonce()));
+        } else if (!(frame instanceof Frame.Pong)) {
+            log.debug("ignoring connection frame {} from {}", frame.type(), connection.agentId());
         }
     }
 

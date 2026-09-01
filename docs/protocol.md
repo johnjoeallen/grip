@@ -10,7 +10,8 @@ format is designed in [Stage 3](roadmap.md), not up front.
 
 - A GRIP connection is a **single WebSocket over TLS** (`wss://`), opened by
   the Agent to the Controller.
-- The connection carries a sequence of **frames**.
+- The connection carries a sequence of **frames**, one per WebSocket **binary**
+  message.
 - The connection multiplexes many **channels**. One channel = one in-flight
   external HTTP request/response.
 - There is **no** requirement of one connection per external request.
@@ -46,42 +47,17 @@ format is designed in [Stage 3](roadmap.md), not up front.
 | `ERROR` | channel | Channel ends abnormally; carries a code |
 | `PING` / `PONG` | connection | Heartbeat / liveness |
 
-Connection-level control for **REGISTER** (Agent identity) and heartbeat
-details are part of the same frame model; their binary encoding is fixed in
-Stage 3.
-
-**Stage 1 provisional framing.** Superseded by [the frame format](#the-frame-format-v0)
-once Stages 3.3/3.4 land. Historically, connection lifecycle used a
-line-oriented placeholder (`dev.grip.protocol.wire.ControlFrame`), one frame
-per WebSocket text message:
-
-| Frame | Direction | Meaning |
-|---|---|---|
-| `REGISTER <agentId> <version>` | Agent → Controller | first frame; claims an id |
-| `REGISTER_OK` | Controller → Agent | admitted |
-| `REGISTER_REJECTED <reason>` | Controller → Agent | `DUPLICATE_AGENT_ID` \| `UNSUPPORTED_VERSION` \| `MALFORMED` \| `RESERVED_AGENT_ID`, then close |
-| `PING` / `PONG` | either | heartbeat |
-| `BYE` | either | graceful close |
-
 `agentId` must match `[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?` and must not be a
 reserved name (`www`, `api`, `controller`, `health`, `admin`, `grip`).
 
-**Stage 2 provisional proxy framing.** Also superseded by
-[the frame format](#the-frame-format-v0). The first end-to-end request slice
-used `dev.grip.protocol.wire.ProxyMessage` + `ProxyCodec`: one JSON object per
-WebSocket text message, telling proxy messages from control frames by a
-leading `{`.
+The concrete byte layout of every frame is in
+[the frame format](#the-frame-format-v0) below.
 
-| Message | Direction | Shape |
-|---|---|---|
-| `{"t":"req","ch":…,"method":…,"target":"/path?q",…,"body":"<base64>"}` | Controller → Agent | whole request |
-| `{"t":"resp","ch":…,"status":…,"headers":…,"body":"<base64>"}` | Agent → Controller | whole response |
-| `{"t":"fail","ch":…,"code":"BAD_GATEWAY","message":…}` | Agent → Controller | internal call failed |
-
-This is a throwaway: **one in-flight request per Agent** (a second gets
-`503`), bodies buffered and base64'd. Stage 3 replaces it with the streamed
-binary frames and bodies stop being base64; Stage 4 lifts the single-request
-limit.
+!!! note "History"
+    Stages 1 and 2 shipped with throwaway framings — a line-oriented
+    `ControlFrame` (WebSocket text) for the connection lifecycle, and a
+    base64-in-JSON `ProxyMessage` for the first proxied request. Stage 3
+    replaced both with the binary frame format; those classes are gone.
 
 ### Streaming
 
