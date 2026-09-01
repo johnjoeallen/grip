@@ -2,6 +2,8 @@ package dev.grip.agent.connect;
 
 import dev.grip.protocol.GripProtocol;
 import dev.grip.protocol.wire.ControlFrame;
+import dev.grip.protocol.wire.ProxyCodec;
+import dev.grip.protocol.wire.ProxyMessage;
 import dev.grip.protocol.wire.RegisterRejectReason;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,6 +49,7 @@ public final class AgentConnection {
     private final Duration handshakeTimeout;
     private final Duration heartbeatInterval;
     private final Duration heartbeatTimeout;
+    private final RequestForwarder forwarder;
 
     private final Object writeLock = new Object();
     private final StringBuilder inbound = new StringBuilder();
@@ -64,14 +67,14 @@ public final class AgentConnection {
     /** Invoked once when the connection ends. Later issues use this for reconnect. */
     public volatile Runnable onClosed = () -> { };
 
-    public AgentConnection(HttpClient http, URI controllerBase, String agentId,
-            Duration handshakeTimeout, Duration heartbeatInterval, Duration heartbeatTimeout) {
+    public AgentConnection(HttpClient http, ConnectionConfig config) {
         this.http = http;
-        this.connectUri = toWebSocketUri(controllerBase);
-        this.agentId = agentId;
-        this.handshakeTimeout = handshakeTimeout;
-        this.heartbeatInterval = heartbeatInterval;
-        this.heartbeatTimeout = heartbeatTimeout;
+        this.connectUri = toWebSocketUri(config.controllerBase());
+        this.agentId = config.agentId();
+        this.handshakeTimeout = config.handshakeTimeout();
+        this.heartbeatInterval = config.heartbeatInterval();
+        this.heartbeatTimeout = config.heartbeatTimeout();
+        this.forwarder = new RequestForwarder(http, config.targetUri(), Duration.ofSeconds(30));
     }
 
     static URI toWebSocketUri(URI controllerBase) {
@@ -165,13 +168,21 @@ public final class AgentConnection {
 
     /** Serialised; the JDK WebSocket forbids a second send before the first completes. */
     public void send(ControlFrame frame) {
+        sendText(frame.encode().strip());
+    }
+
+    private void sendProxy(ProxyMessage message) {
+        sendText(ProxyCodec.encode(message));
+    }
+
+    private void sendText(String text) {
         synchronized (writeLock) {
             WebSocket ws = socket;
             if (ws == null || state == ConnectionState.DISCONNECTED) {
                 return;
             }
             try {
-                ws.sendText(frame.encode().strip(), true).get(10, TimeUnit.SECONDS);
+                ws.sendText(text, true).get(10, TimeUnit.SECONDS);
             } catch (Exception e) {
                 close("send-failed: " + rootMessage(e));
             }
@@ -216,13 +227,19 @@ public final class AgentConnection {
         closed.complete(reason);
     }
 
-    private void onFrameLine(String line) {
+    private void onMessage(String message) {
         lastInbound = Instant.now();
+
+        if (ProxyCodec.isProxyMessage(message)) {
+            handleProxyMessage(message);
+            return;
+        }
+
         ControlFrame frame;
         try {
-            frame = ControlFrame.parse(line);
+            frame = ControlFrame.parse(message);
         } catch (RuntimeException e) {
-            log.debug("ignoring unparseable frame: {}", line);
+            log.debug("ignoring unparseable frame: {}", message);
             return;
         }
         if (!registered.isDone()) {
@@ -235,6 +252,24 @@ public final class AgentConnection {
             close("controller-bye");
         }
         // PONG and anything else: liveness only.
+    }
+
+    private void handleProxyMessage(String message) {
+        ProxyMessage decoded;
+        try {
+            decoded = ProxyCodec.decode(message);
+        } catch (RuntimeException e) {
+            log.warn("undecodable proxy message dropped: {}", e.toString());
+            return;
+        }
+        if (decoded instanceof ProxyMessage.Request request) {
+            // Forward on a virtual thread so the WebSocket reader keeps flowing.
+            Thread.ofVirtual().name("grip-agent-forward-" + request.channel()).start(() -> {
+                ProxyMessage reply = forwarder.forward(request);
+                sendProxy(reply);
+            });
+        }
+        // Response/Failure are Controller->Agent only in this direction; ignore.
     }
 
     private void handleRegisterReply(ControlFrame frame) {
@@ -271,12 +306,12 @@ public final class AgentConnection {
         public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
             inbound.append(data);
             if (last) {
-                String line = inbound.toString();
+                String message = inbound.toString();
                 inbound.setLength(0);
                 try {
-                    onFrameLine(line);
+                    onMessage(message);
                 } catch (RuntimeException e) {
-                    log.warn("frame handling failed", e);
+                    log.warn("message handling failed", e);
                 }
             }
             webSocket.request(1);

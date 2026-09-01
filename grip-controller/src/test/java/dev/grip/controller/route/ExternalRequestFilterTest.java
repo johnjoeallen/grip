@@ -10,8 +10,9 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 class ExternalRequestFilterTest {
@@ -19,7 +20,8 @@ class ExternalRequestFilterTest {
     private final AgentRegistry registry = new AgentRegistry();
     private final HostRouter router = new HostRouter(registry,
             new GripControllerProperties("grip.example.com", null));
-    private final ExternalRequestFilter filter = new ExternalRequestFilter(router);
+    private final RequestProxy proxy = mock(RequestProxy.class);
+    private final ExternalRequestFilter filter = new ExternalRequestFilter(router, proxy);
 
     private MockHttpServletResponse run(String host) throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/status");
@@ -69,10 +71,14 @@ class ExternalRequestFilterTest {
     }
 
     @Test
-    void resolvedRouteIs502UntilProxyingLands() throws Exception {
+    void aResolvedRouteIsHandedToTheProxy() throws Exception {
         connect("alpha");
-        MockHttpServletResponse response = run("alpha.grip.example.com");
-        assertThat(response.getStatus()).isEqualTo(502);
-        assertThat(response.getContentAsString()).contains("alpha");
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/status");
+        request.addHeader("Host", "alpha.grip.example.com");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request, response, mock(FilterChain.class));
+
+        verify(proxy).proxy(eq(request), eq(response), eq("alpha"), any(AgentConnection.class));
     }
 }

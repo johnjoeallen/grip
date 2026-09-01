@@ -29,9 +29,11 @@ public class ExternalRequestFilter extends OncePerRequestFilter {
     private static final Logger log = LoggerFactory.getLogger(ExternalRequestFilter.class);
 
     private final HostRouter router;
+    private final RequestProxy proxy;
 
-    public ExternalRequestFilter(HostRouter router) {
+    public ExternalRequestFilter(HostRouter router, RequestProxy proxy) {
         this.router = router;
+        this.proxy = proxy;
     }
 
     @Override
@@ -48,9 +50,7 @@ public class ExternalRequestFilter extends OncePerRequestFilter {
         switch (route) {
             case HostRouter.Route.Resolved resolved -> {
                 log.debug("{} {} -> agent {}", request.getMethod(), request.getRequestURI(), resolved.agentId());
-                ProblemResponse.write(response, 502, "Not implemented",
-                        "Routing resolves to agent '" + resolved.agentId()
-                                + "' but request proxying is not implemented yet (Stage 2).");
+                proxy.proxy(request, response, resolved.agentId(), resolved.connection());
             }
             case HostRouter.Route.UnknownAgent unknown -> ProblemResponse.write(response, 404, "Unknown agent",
                     "No agent named '" + unknown.agentId() + "' is registered.");

@@ -62,6 +62,9 @@
                         <javax.net.ssl.trustStore>${project.basedir}/src/test/resources/tls/truststore.p12</javax.net.ssl.trustStore>
                         <javax.net.ssl.trustStorePassword>changeit</javax.net.ssl.trustStorePassword>
                         <javax.net.ssl.trustStoreType>PKCS12</javax.net.ssl.trustStoreType>
+                        <!-- let the end-to-end tests set an explicit Host header to
+                             drive sub-domain routing without real DNS -->
+                        <jdk.httpclient.allowRestrictedHeaders>host</jdk.httpclient.allowRestrictedHeaders>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>
