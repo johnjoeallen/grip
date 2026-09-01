@@ -7,8 +7,8 @@ map.
 
 | Stage | Goal | State |
 |---|---|---|
-| **0 — Foundation** | Maven multi-module skeleton, Controller/Agent/protocol modules that boot, CI, docs site | skeleton committed; CI & Pages issues open |
-| **1 — Agent connection** | Agent dials out over TLS, registers, heartbeats, reconnects with backoff | planned |
+| **0 — Foundation** | Maven multi-module skeleton, Controller/Agent/protocol modules that boot, CI, docs site | **done** |
+| **1 — Agent connection** | Agent dials out over TLS (WebSocket), registers, heartbeats, reconnects with backoff | **1a done** (connect + REGISTER + registry + duplicate handling); heartbeat & reconnect next |
 | **2 — Single proxied request** | One request end to end: client → Controller → Agent → internal service → back. May allow only one active request. | planned |
 | **3 — Framing protocol** | An explicit GRIP frame format and codec; `CANCEL` and `ERROR` wired through | planned |
 | **4 — Multiplexing** | Many requests over one Agent connection; `channel → context` on both sides; out-of-order responses | planned |

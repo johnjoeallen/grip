@@ -52,8 +52,8 @@ flowchart TB
     controller -->|"6 - HTTPS response"| client
 ```
 
-1. The Agent opens a persistent outbound TLS connection to the Controller and
-   registers a name (`alpha`).
+1. The Agent opens a persistent outbound WebSocket (over TLS) to the Controller
+   and registers a name (`alpha`).
 2. An external client makes an ordinary HTTPS request to
    `alpha.grip.example.com`.
 3. The Controller matches the sub-domain to a connected Agent, allocates a
@@ -171,10 +171,12 @@ GRIP stays small. It is a reverse HTTP proxy over a persistent outbound
 connection with multiplexed channels — nothing more.
 
 It is **not** a VPN. There are no virtual interfaces, no IP routing, no message
-broker, no database, and no requirement for WebSockets or inbound connectivity
-to the Agent. The protocol is kept generic enough that it could carry other
-application protocols later, but the initial implementation is optimised for
-HTTP proxying.
+broker, no database, and no inbound connectivity to the Agent. The Agent's one
+connection is a WebSocket over TLS (chosen because the JDK HTTP client cannot
+hold a request and response open simultaneously — see the
+[protocol page](docs/protocol.md)). The framing is kept generic enough to
+carry other application protocols later, but the initial implementation is
+optimised for HTTP proxying.
 
 It is also **not** a way to get around network security. GRIP is a tunnel and
 makes no attempt to hide that — a TLS-inspecting firewall will identify it as

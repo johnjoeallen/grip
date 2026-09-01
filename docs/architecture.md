@@ -55,9 +55,9 @@ sequenceDiagram
     participant A as GRIP Agent
     participant C as GRIP Controller
 
-    A->>C: HTTPS connect (validate chain + hostname)
-    A->>C: open long-lived stream to /grip/connect
-    A->>C: REGISTER { agentId, version }
+    A->>C: TLS connect + validate chain + hostname
+    A->>C: open WebSocket wss://controller/grip/connect
+    A->>C: REGISTER agentId version
     C->>C: check id not already connected
     alt id free
         C-->>A: REGISTER_OK
@@ -71,8 +71,10 @@ sequenceDiagram
     end
 ```
 
-- The connection is **outbound from the Agent**. The Controller never dials the
-  Agent.
+- The connection is a **single WebSocket over TLS, outbound from the Agent**.
+  The Controller never dials the Agent. (WebSocket because the JDK HTTP client
+  cannot hold a request and response open at once — see
+  [the protocol page](protocol.md).)
 - If the connection drops, the Agent reconnects with exponential backoff
   (`initial-backoff` → `max-backoff`).
 - Missing heartbeats let either side detect a dead peer before TCP would.
